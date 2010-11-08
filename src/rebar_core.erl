@@ -63,7 +63,7 @@ run(RawArgs) ->
     Commands = parse_args(RawArgs),
 
     %% Make sure crypto is running
-    crypto:start(),
+    ok = crypto:start(),
 
     %% Initialize logging system
     rebar_log:init(),
@@ -86,20 +86,21 @@ run(RawArgs) ->
     process_commands(CommandAtoms).
 
 skip_dir(Dir) ->
-    case erlang:get({skip_dir, Dir}) of
+    SkipDir = {skip_dir, Dir},
+    case erlang:get(SkipDir) of
         undefined ->
             ?DEBUG("Adding skip dir: ~s\n", [Dir]),
-            erlang:put({skip_dir, Dir}, true);
+            erlang:put(SkipDir, true);
         true ->
             ok
     end.
 
 is_skip_dir(Dir) ->
     case erlang:get({skip_dir, Dir}) of
-        undefined ->
-            false;
-        true ->
-            true
+	undefined ->
+	    false;
+	true ->
+	    true
     end.
 
 skip_dirs() ->
@@ -200,9 +201,9 @@ help() ->
 %%
 commands() ->
     S = <<"
-analyze                              Analyze with Dialyzer
-build_plt                            Build Dialyzer PLT
-check_plt                            Check Dialyzer PLT
+dialyze                              Analyze with Dialyzer
+build-plt                            Build Dialyzer PLT
+check-plt                            Check Dialyzer PLT
 
 clean                                Clean
 compile                              Compile sources
@@ -286,10 +287,10 @@ process_commands([]) ->
     end;
 process_commands([Command | Rest]) ->
     %% Reset skip dirs
-    [erlang:erase({skip_dir, D}) || D <- skip_dirs()],
+    lists:foreach(fun (D) -> erlang:erase({skip_dir, D}) end, skip_dirs()),
     Operations = erlang:get(operations),
 
-    process_dir(rebar_utils:get_cwd(), rebar_config:new(), Command, sets:new()),
+    _ = process_dir(rebar_utils:get_cwd(), rebar_config:new(), Command, sets:new()),
     case erlang:get(operations) of
         Operations ->
             %% This command didn't do anything
@@ -442,8 +443,11 @@ execute(Command, Modules, Config, ModuleFile) ->
                     ok;
                 {error, failed} ->
                     ?FAIL;
+                {Module, {error, _} = Other} ->
+                    ?ABORT("~p failed while processing ~s in module ~s: ~s\n",
+                           [Command, Dir, Module, io_lib:print(Other, 1,80,-1)]);
                 Other ->
-                    ?ABORT("~p failed while processing ~s: ~s",
+                    ?ABORT("~p failed while processing ~s: ~s\n",
                            [Command, Dir, io_lib:print(Other, 1,80,-1)])
             end
     end.
@@ -465,14 +469,14 @@ restore_code_path(no_change) ->
 restore_code_path({old, Path}) ->
     %% Verify that all of the paths still exist -- some dynamically add paths
     %% can get blown away during clean.
-    true = code:set_path(lists:filter(fun filelib:is_file/1, Path)),
+    true = code:set_path([F || F <- Path, filelib:is_file(F)]),
     ok.
 
 
 expand_lib_dirs([], _Root, Acc) ->
     Acc;
 expand_lib_dirs([Dir | Rest], Root, Acc) ->
-    Apps = filelib:wildcard(filename:join([Dir, '*', ebin])),
+    Apps = filelib:wildcard(filename:join([Dir, "*", "ebin"])),
     FqApps = [filename:join([Root, A]) || A <- Apps],
     expand_lib_dirs(Rest, Root, Acc ++ FqApps).
 
@@ -495,8 +499,8 @@ run_modules([Module | Rest], Command, Config, File) ->
     case Module:Command(Config, File) of
         ok ->
             run_modules(Rest, Command, Config, File);
-        {error, Reason} ->
-            {error, Reason}
+        {error, _} = Error ->
+            {Module, Error}
     end.
 
 
